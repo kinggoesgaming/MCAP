@@ -51,5 +51,9 @@ checkstyle {
     showViolations = true
 }
 
+dependencies  {
+    compile project('MCAP-Annotate')
+}
+
 sourceCompatibility = 1.8
 targetCompatibility = 1.8
