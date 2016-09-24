@@ -1,0 +1,3 @@
+[submodule "MCAP-Annotate"]
+	path = MCAP-Annotate
+	url = https://github.com/kinggoesgaming/MCAP-Annotate.git
