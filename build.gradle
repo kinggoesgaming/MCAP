@@ -51,9 +51,5 @@ checkstyle {
     showViolations = true
 }
 
-dependencies {
-    compile 'org.spongepowered:spongeapi:' + project.spongeapi
-}
-
 sourceCompatibility = 1.8
 targetCompatibility = 1.8
