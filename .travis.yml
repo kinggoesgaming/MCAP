@@ -1,0 +1,16 @@
+language: java
+sudo: true
+jdk:
+- oraclejdk8
+notifications:
+  email: false
+  webhooks:
+    urls:
+      - https://webhooks.gitter.im/e/521b6e832a3e037f9fa2
+      - https://webhooks.gitter.im/e/a5d11ac76ee3e82c1a80
+    on_success: change
+    on_failure: always
+    on_start: never
+script:
+- 'chmod +x ./gradlew'
+- './gradlew'
