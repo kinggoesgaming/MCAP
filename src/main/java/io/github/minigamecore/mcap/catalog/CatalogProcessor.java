@@ -27,9 +27,9 @@ package io.github.minigamecore.mcap.catalog;
 
 import static java.lang.String.format;
 import static javax.lang.model.SourceVersion.latestSupported;
+import static javax.tools.Diagnostic.Kind.ERROR;
 import static javax.tools.Diagnostic.Kind.NOTE;
-import static javax.tools.Diagnostic.Kind.WARNING;
-import static javax.tools.StandardLocation.CLASS_OUTPUT;
+import static javax.tools.StandardLocation.SOURCE_OUTPUT;
 import static ninja.leaping.configurate.commented.SimpleCommentedConfigurationNode.root;
 
 import io.github.minigamecore.mcap.annotate.catalog.Catalog;
@@ -41,11 +41,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Filer;
@@ -55,7 +53,12 @@ import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
 
 /**
  * The processor to analyze {@link Catalog}.
@@ -73,12 +76,10 @@ public class CatalogProcessor extends AbstractProcessor {
 
     // Statistics
     private int rounds = 0;
-    private int successes = 0;
-    private int failures = 0;
+    private int assignments = 0;
 
-    private final List<Element> notTypes = new ArrayList<>();
-    private final Map<Element, String> notSpecificTypes = new HashMap<>();
-    private final Map<Element, String> duplicates = new HashMap<>();
+    private Elements elements;
+    private Types types;
 
     @Override
     public synchronized void init(ProcessingEnvironment env) {
@@ -87,6 +88,9 @@ public class CatalogProcessor extends AbstractProcessor {
         // TODO initialization message
         filer = env.getFiler();
         node.getNode("version").setValue(1);
+
+        elements = env.getElementUtils();
+        types = env.getTypeUtils();
     }
 
     @Override
@@ -94,115 +98,148 @@ public class CatalogProcessor extends AbstractProcessor {
 
         if (env.processingOver()) {
 
-            if (env.errorRaised()) {
-                return false;
-            }
+            if (!env.errorRaised()) {
 
-            try {
-                Path path = Paths.get(filer.createResource(CLASS_OUTPUT, "assets.minigamecore.mcap", "catalog.json").toUri());
+                try {
+                    Path path = Paths.get(filer.createResource(SOURCE_OUTPUT, "", "assets/minigamecore/mcap/catalog.json").toUri());
 
-                if (Files.notExists(path)) {
-                    if (Files.notExists(path.getParent())) {
-                        Files.createDirectories(path.getParent());
+                    if (Files.notExists(path)) {
+                        if (Files.notExists(path.getParent())) {
+                            Files.createDirectories(path.getParent());
+                        }
+
+                        Files.createFile(path);
                     }
 
-                    Files.createFile(path);
+                    ConfigurationLoader<ConfigurationNode> loader = GsonConfigurationLoader.builder().setPath(path).build();
+                    loader.save(node);
+                    getMessager().printMessage(NOTE, format("Catalog mappings available at %s", path));
+                } catch (IOException e) {
+                    getMessager().printMessage(ERROR, "Error occurs while processing catalog.json");
+                    e.printStackTrace();
                 }
 
-                ConfigurationLoader<ConfigurationNode> loader = GsonConfigurationLoader.builder().setPath(path).build();
-                loader.save(node);
-            } catch (IOException e) {
-                e.printStackTrace();
-                return false;
+                // TODO do stats
+                getMessager().printMessage(NOTE, "====================================");
+                getMessager().printMessage(NOTE, "Catalog Stats");
+                getMessager().printMessage(NOTE, "====================================");
+                getMessager().printMessage(NOTE, format("Rounds: %s, Assignments: %s", rounds, assignments));
+                getMessager().printMessage(NOTE, "====================================");
             }
-
-            // TODO do stats
-            getMessager().printMessage(NOTE, "=================================");
-            getMessager().printMessage(NOTE, "Catalog Stats");
-            getMessager().printMessage(NOTE, "=================================");
-            getMessager().printMessage(NOTE, format("Rounds: %s, Successes: %s, Failures: %s", rounds, successes, failures));
-
-            if (failures > 0) {
-                getMessager().printMessage(NOTE, "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^");
-
-                if (!notTypes.isEmpty()) {
-                    getMessager().printMessage(WARNING, format("%s non Type instances found annotated with @%s:\n",
-                            notTypes.size(), CATALOG));
-
-                    notTypes.forEach(element -> getMessager().printMessage(WARNING, element.toString() + "\n"));
-                }
-
-                if (!notSpecificTypes.isEmpty()) {
-                    getMessager().printMessage(WARNING, format("%s non %s instances found annotated with @%s:\n",
-                            notSpecificTypes.size(), CATALOG_TYPE, CATALOG));
-
-                    notSpecificTypes.forEach((element, string) -> getMessager().printMessage(WARNING, format("Attempted %s for %s\n",
-                            element.toString(), string)));
-                }
-
-                if (!duplicates.isEmpty()) {
-                    getMessager().printMessage(WARNING, format("%s duplicates found:\n", duplicates.size()));
-
-                    duplicates.forEach(((element, string) -> {
-                        getMessager().printMessage(WARNING, format("Attempted %s for %s\n", element.toString(), string));
-                    }));
-                }
-
-                getMessager().printMessage(NOTE, "=================================");
-            }
-
-            return true;
+            return false;
         }
 
         rounds++;
         ConfigurationNode localNode = node.getNode("mappings");
 
-        annotations.forEach(annotation -> env.getElementsAnnotatedWith(annotation).forEach(element -> {
+        annotations.forEach(annotation -> {
+            env.getElementsAnnotatedWith(annotation).forEach(element -> {
 
-            // Only types should have the annotation.
-            // Although @Catalog should not compile, if we place it anywhere
-            // else, this is just for future proofing.
-            if (!(element instanceof TypeElement)) {
-                notTypes.add(element);
-                failures++;
-                return;
-            }
-
-            TypeElement typeElement = (TypeElement) element;
-
-            final boolean[] isCatalog = {false};
-            final Catalog catalog = typeElement.getAnnotation(Catalog.class);
-
-            // Ensure the Catalog's specified CatalogType is same the element's type
-            typeElement.getInterfaces().forEach(iface -> {
-                if (!isCatalog[0] && catalog.catalogTypeClass().equals(iface.toString())) {
-                    isCatalog[0] = true;
+                // Only classes should have the annotation.
+                // Although @Catalog should not compile if placed on methods,
+                // fields, constructors, etc, however interfaces and enums still
+                // are legal Types for assignment.
+                if (!(element.getKind().equals(ElementKind.CLASS))) {
+                    getMessager().printMessage(ERROR, format("@%s can only be placed on classes.", CATALOG), element);
                 }
+
+                TypeElement typeElement = (TypeElement) element;
+                boolean match = false;
+                TypeMirror compare = elements.getTypeElement(CATALOG_TYPE).asType();
+
+                // Ensure the element implements CatalogType.
+                for (TypeMirror tm : processingEnv.getTypeUtils().directSupertypes(typeElement.asType())) {
+                    if (!match && compare != null) {
+
+                        if (types.isAssignable(tm, compare)) {
+                            match = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!match) {
+                    getMessager().printMessage(ERROR, format("%s does not implement %s", typeElement, CATALOG_TYPE), typeElement);
+                }
+
+                match = false;
+                final Catalog catalog = typeElement.getAnnotation(Catalog.class);
+                compare = elements.getTypeElement(catalog.catalogTypeClass()).asType();
+
+                // Ensure the Catalog's specified CatalogType is same the element's type
+                for (TypeMirror tm : processingEnv.getTypeUtils().directSupertypes(typeElement.asType())) {
+
+                    if (!match && compare != null) {
+
+                        if (types.isAssignable(tm, compare)) {
+                            match = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!match) {
+                    getMessager().printMessage(ERROR, format("%s is not an instance of %s", typeElement, catalog.catalogTypeClass()), typeElement);
+                }
+
+                // Check if the target pseudo enum class exists
+                final TypeElement containerClassElement = elements.getTypeElement(catalog.containerClass());
+
+                if (containerClassElement == null) {
+                    getMessager().printMessage(ERROR, format("The pseudo enum class %s does not exist", catalog.containerClass()), typeElement);
+                }
+
+                assert containerClassElement != null;
+                match = false;
+                boolean fieldExists = false;
+
+                for (VariableElement elm:
+                     containerClassElement.getEnclosedElements().stream().filter(elm1 -> elm1.getKind() == ElementKind.FIELD).map(
+                             (Function<Element, VariableElement>) element1 -> (VariableElement) element1).collect(Collectors.toList())) {
+
+                    if (!match) {
+
+                        // Check if the field in the pseudo enum class exists
+                        if (!catalog.field().equals(elm.getSimpleName().toString())) {
+                            continue;
+                        }
+                        fieldExists = true;
+
+                        // Check if the field type type matches CatalogType type.
+                        if (types.isAssignable(compare, elm.asType())) {
+                            match = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!match) {
+
+                    if (!fieldExists) {
+                        getMessager().printMessage(ERROR, format("Field %s does not exist in %s", catalog.field(), catalog.containerClass()),
+                                typeElement);
+                    }
+
+                    getMessager().printMessage(ERROR, format("Field %s is not of type %s", catalog.field(), catalog.catalogTypeClass()), typeElement);
+                }
+
+
+                ConfigurationNode tmpNode = localNode.getNode(catalog.catalogTypeClass(), catalog.containerClass(), catalog.field());
+
+                // Check if a mapping exists for a field.
+                // A field can only have one value assigned.
+                // First to arrive, first to get assigned.
+                if (!tmpNode.isVirtual()) {
+                    getMessager().printMessage(ERROR,
+                            format("Field %s in class %s already has a mapping available", catalog.field(), catalog.containerClass()), typeElement);
+                }
+
+                tmpNode.setValue(typeElement.toString());
+                assignments++;
             });
+        });
 
-            if (!isCatalog[0]) {
-                notSpecificTypes.put(typeElement, catalog.catalogTypeClass());
-                failures++;
-                return;
-            }
-
-            ConfigurationNode tmpNode = localNode.getNode(catalog.catalogTypeClass(), catalog.containerClass(), catalog.field());
-
-            // Check if a mapping exists for a field.
-            // A field can only have one value assigned.
-            // First to arrive, first to get assigned.
-            if (!tmpNode.isVirtual()) {
-                duplicates.put(typeElement, format("%s#%s: %s >>>>> Assigned value: %s", catalog.containerClass(), catalog.field(),
-                        catalog.catalogTypeClass(), tmpNode.getString()));
-                failures++;
-                return;
-            }
-
-            tmpNode.setValue(typeElement.toString());
-            successes++;
-        }));
-
-        return true;
+        return false;
     }
 
     @Override
