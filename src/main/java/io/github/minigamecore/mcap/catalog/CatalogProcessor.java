@@ -90,7 +90,6 @@ public class CatalogProcessor extends AbstractProcessor {
     public synchronized void init(ProcessingEnvironment env) {
         super.init(env);
 
-        // TODO initialization message
         // Configurate
         filer = env.getFiler();
         node.getNode("version").setValue(1);
@@ -151,16 +150,14 @@ public class CatalogProcessor extends AbstractProcessor {
             TypeElement typeElement = (TypeElement) element;
 
             // Ensure the element implements CatalogType.
-            TypeMirror compare = elements.getTypeElement(CATALOG_TYPE).asType();
-
-            if (!typeElement.asType().equals(compare)) {
-                if (!isAssignable(typeElement.asType(), compare)) {
+            if (!typeElement.asType().equals(elements.getTypeElement(CATALOG_TYPE).asType())) {
+                if (!isAssignable(typeElement.asType(), elements.getTypeElement(CATALOG_TYPE).asType())) {
                     getMessager().printMessage(ERROR, format("%s does not implement %s", typeElement, CATALOG_TYPE), typeElement);
                 }
             }
 
             final Catalog catalog = typeElement.getAnnotation(Catalog.class);
-            compare = elements.getTypeElement(catalog.catalogTypeClass()).asType();
+            TypeMirror compare = elements.getTypeElement(catalog.catalogTypeClass()).asType();
 
             // Ensure the Catalog's specified CatalogType is same the element's type
             if (!typeElement.asType().equals(compare)) {
@@ -189,7 +186,6 @@ public class CatalogProcessor extends AbstractProcessor {
                         typeElement);
             }
 
-            TypeMirror finalCompare = compare;
             variableElements.forEach(elm -> {
 
                 if (!elm.getModifiers().contains(Modifier.PUBLIC)) {
@@ -204,9 +200,7 @@ public class CatalogProcessor extends AbstractProcessor {
                     getMessager().printMessage(WARNING, format("Field %s in class %s is not final", catalog.field(), catalog.containerClass()), elm);
                 }
 
-                getMessager().printMessage(NOTE, elm.asType().toString());
-
-                if (!finalCompare.equals(elm.asType())) {
+                if (!compare.toString().equals(elm.asType().toString())) {
 
                     if (!isAssignable(elm.asType(), elements.getTypeElement(catalog.catalogTypeClass()).asType())) {
                         getMessager().printMessage(ERROR, format("Field %s in class %s is not of type %s", catalog.field(), catalog.containerClass(),
