@@ -29,6 +29,7 @@ import static java.lang.String.format;
 import static javax.lang.model.SourceVersion.latestSupported;
 import static javax.tools.Diagnostic.Kind.ERROR;
 import static javax.tools.Diagnostic.Kind.NOTE;
+import static javax.tools.Diagnostic.Kind.WARNING;
 import static javax.tools.StandardLocation.SOURCE_OUTPUT;
 import static ninja.leaping.configurate.commented.SimpleCommentedConfigurationNode.root;
 
@@ -41,10 +42,12 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import javax.annotation.Nonnull;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Filer;
 import javax.annotation.processing.Messager;
@@ -54,6 +57,7 @@ import javax.annotation.processing.SupportedAnnotationTypes;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
 import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
 import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.TypeMirror;
@@ -70,7 +74,7 @@ public class CatalogProcessor extends AbstractProcessor {
     static final String CATALOG = "io.github.minigamecore.mcap.annotate.catalog.Catalog";
     private static final String CATALOG_TYPE = "org.spongepowered.api.CatalogType";
 
-    // Configurate stuff
+    // Configurate
     private ConfigurationNode node = root();
     private Filer filer;
 
@@ -78,6 +82,7 @@ public class CatalogProcessor extends AbstractProcessor {
     private int rounds = 0;
     private int assignments = 0;
 
+    // Utils
     private Elements elements;
     private Types types;
 
@@ -86,9 +91,11 @@ public class CatalogProcessor extends AbstractProcessor {
         super.init(env);
 
         // TODO initialization message
+        // Configurate
         filer = env.getFiler();
         node.getNode("version").setValue(1);
 
+        // Utils
         elements = env.getElementUtils();
         types = env.getTypeUtils();
     }
@@ -119,7 +126,6 @@ public class CatalogProcessor extends AbstractProcessor {
                     e.printStackTrace();
                 }
 
-                // TODO do stats
                 getMessager().printMessage(NOTE, "====================================");
                 getMessager().printMessage(NOTE, "Catalog Stats");
                 getMessager().printMessage(NOTE, "====================================");
@@ -132,112 +138,96 @@ public class CatalogProcessor extends AbstractProcessor {
         rounds++;
         ConfigurationNode localNode = node.getNode("mappings");
 
-        annotations.forEach(annotation -> {
-            env.getElementsAnnotatedWith(annotation).forEach(element -> {
+        annotations.forEach(annotation -> env.getElementsAnnotatedWith(Catalog.class).forEach(element -> {
 
-                // Only classes should have the annotation.
-                // Although @Catalog should not compile if placed on methods,
-                // fields, constructors, etc, however interfaces and enums still
-                // are legal Types for assignment.
-                if (!(element.getKind().equals(ElementKind.CLASS))) {
-                    getMessager().printMessage(ERROR, format("@%s can only be placed on classes.", CATALOG), element);
-                }
+            // Only classes should have the annotation.
+            // Although @Catalog should not compile if placed on methods,
+            // fields, constructors, etc, however interfaces and enums still
+            // are legal Types for assignment.
+            if (!(element.getKind() == ElementKind.CLASS)) {
+                getMessager().printMessage(ERROR, format("@%s can only be placed on classes.", CATALOG), element);
+            }
 
-                TypeElement typeElement = (TypeElement) element;
-                boolean match = false;
-                TypeMirror compare = elements.getTypeElement(CATALOG_TYPE).asType();
+            TypeElement typeElement = (TypeElement) element;
 
-                // Ensure the element implements CatalogType.
-                for (TypeMirror tm : processingEnv.getTypeUtils().directSupertypes(typeElement.asType())) {
-                    if (!match && compare != null) {
+            // Ensure the element implements CatalogType.
+            TypeMirror compare = elements.getTypeElement(CATALOG_TYPE).asType();
 
-                        if (types.isAssignable(tm, compare)) {
-                            match = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (!match) {
+            if (!typeElement.asType().equals(compare)) {
+                if (!isAssignable(typeElement.asType(), compare)) {
                     getMessager().printMessage(ERROR, format("%s does not implement %s", typeElement, CATALOG_TYPE), typeElement);
                 }
+            }
 
-                match = false;
-                final Catalog catalog = typeElement.getAnnotation(Catalog.class);
-                compare = elements.getTypeElement(catalog.catalogTypeClass()).asType();
+            final Catalog catalog = typeElement.getAnnotation(Catalog.class);
+            compare = elements.getTypeElement(catalog.catalogTypeClass()).asType();
 
-                // Ensure the Catalog's specified CatalogType is same the element's type
-                for (TypeMirror tm : processingEnv.getTypeUtils().directSupertypes(typeElement.asType())) {
+            // Ensure the Catalog's specified CatalogType is same the element's type
+            if (!typeElement.asType().equals(compare)) {
 
-                    if (!match && compare != null) {
-
-                        if (types.isAssignable(tm, compare)) {
-                            match = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (!match) {
+                if (!isAssignable(typeElement.asType(), compare)) {
                     getMessager().printMessage(ERROR, format("%s is not an instance of %s", typeElement, catalog.catalogTypeClass()), typeElement);
                 }
+            }
 
-                // Check if the target pseudo enum class exists
-                final TypeElement containerClassElement = elements.getTypeElement(catalog.containerClass());
+            // Check if the target pseudo enum class exists
+            final TypeElement containerClassElement = elements.getTypeElement(catalog.containerClass());
 
-                if (containerClassElement == null) {
-                    getMessager().printMessage(ERROR, format("The pseudo enum class %s does not exist", catalog.containerClass()), typeElement);
+            if (containerClassElement == null) {
+                getMessager().printMessage(ERROR, format("The catalog container class %s does not exist", catalog.containerClass()), typeElement);
+            }
+
+            assert containerClassElement != null;
+
+            List<VariableElement> variableElements = containerClassElement.getEnclosedElements().stream()
+                    .filter(elm1 -> elm1.getKind() == ElementKind.FIELD)
+                    .map((Function<Element, VariableElement>) element1 -> (VariableElement) element1)
+                    .filter(elm -> catalog.field().equals(elm.getSimpleName().toString())).collect(Collectors.toList());
+
+            if (variableElements.size() == 0) {
+                getMessager().printMessage(ERROR, format("Field %s does not exist in class %s", catalog.field(), catalog.containerClass()),
+                        typeElement);
+            }
+
+            TypeMirror finalCompare = compare;
+            variableElements.forEach(elm -> {
+
+                if (!elm.getModifiers().contains(Modifier.PUBLIC)) {
+                    getMessager().printMessage(ERROR, format("Field %s in class %s is not public", catalog.field(), catalog.containerClass()), elm);
                 }
 
-                assert containerClassElement != null;
-                match = false;
-                boolean fieldExists = false;
+                if (!elm.getModifiers().contains(Modifier.STATIC)) {
+                    getMessager().printMessage(ERROR, format("Field %s in class %s is not static", catalog.field(), catalog.containerClass()), elm);
+                }
 
-                for (VariableElement elm:
-                     containerClassElement.getEnclosedElements().stream().filter(elm1 -> elm1.getKind() == ElementKind.FIELD).map(
-                             (Function<Element, VariableElement>) element1 -> (VariableElement) element1).collect(Collectors.toList())) {
+                if (!elm.getModifiers().contains(Modifier.FINAL)) {
+                    getMessager().printMessage(WARNING, format("Field %s in class %s is not final", catalog.field(), catalog.containerClass()), elm);
+                }
 
-                    if (!match) {
+                getMessager().printMessage(NOTE, elm.asType().toString());
 
-                        // Check if the field in the pseudo enum class exists
-                        if (!catalog.field().equals(elm.getSimpleName().toString())) {
-                            continue;
-                        }
-                        fieldExists = true;
+                if (!finalCompare.equals(elm.asType())) {
 
-                        // Check if the field type type matches CatalogType type.
-                        if (types.isAssignable(compare, elm.asType())) {
-                            match = true;
-                            break;
-                        }
+                    if (!isAssignable(elm.asType(), elements.getTypeElement(catalog.catalogTypeClass()).asType())) {
+                        getMessager().printMessage(ERROR, format("Field %s in class %s is not of type %s", catalog.field(), catalog.containerClass(),
+                                catalog.catalogTypeClass()), typeElement);
                     }
                 }
-
-                if (!match) {
-
-                    if (!fieldExists) {
-                        getMessager().printMessage(ERROR, format("Field %s does not exist in %s", catalog.field(), catalog.containerClass()),
-                                typeElement);
-                    }
-
-                    getMessager().printMessage(ERROR, format("Field %s is not of type %s", catalog.field(), catalog.catalogTypeClass()), typeElement);
-                }
-
-
-                ConfigurationNode tmpNode = localNode.getNode(catalog.catalogTypeClass(), catalog.containerClass(), catalog.field());
-
-                // Check if a mapping exists for a field.
-                // A field can only have one value assigned.
-                // First to arrive, first to get assigned.
-                if (!tmpNode.isVirtual()) {
-                    getMessager().printMessage(ERROR,
-                            format("Field %s in class %s already has a mapping available", catalog.field(), catalog.containerClass()), typeElement);
-                }
-
-                tmpNode.setValue(typeElement.toString());
-                assignments++;
             });
-        });
+
+            ConfigurationNode tmpNode = localNode.getNode(catalog.catalogTypeClass(), catalog.containerClass(), catalog.field());
+
+            // Check if a mapping exists for a field.
+            // A field can only have one value assigned.
+            // First to arrive, first to get assigned.
+            if (!tmpNode.isVirtual()) {
+                getMessager().printMessage(ERROR,
+                        format("Field %s in class %s already has a mapping available", catalog.field(), catalog.containerClass()), typeElement);
+            }
+
+            tmpNode.setValue(typeElement.toString());
+            assignments++;
+        }));
 
         return false;
     }
@@ -249,6 +239,16 @@ public class CatalogProcessor extends AbstractProcessor {
 
     private Messager getMessager() {
         return this.processingEnv.getMessager();
+    }
+
+    private boolean isAssignable(@Nonnull TypeMirror type, @Nonnull TypeMirror compareType) {
+        for (TypeMirror tm : processingEnv.getTypeUtils().directSupertypes(type)) {
+
+            if (types.isAssignable(tm, compareType)) {
+                return true;
+            }
+        }
+        return false;
     }
 
 }
