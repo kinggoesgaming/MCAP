@@ -157,7 +157,7 @@ public class CatalogProcessor extends AbstractProcessor {
             }
 
             final Catalog catalog = typeElement.getAnnotation(Catalog.class);
-            TypeMirror compare = elements.getTypeElement(catalog.catalogTypeClass()).asType();
+            TypeMirror compare = types.erasure(elements.getTypeElement(catalog.catalogTypeClass()).asType());
 
             // Ensure the Catalog's specified CatalogType is same the element's type
             if (!typeElement.asType().equals(compare)) {
@@ -200,9 +200,9 @@ public class CatalogProcessor extends AbstractProcessor {
                     getMessager().printMessage(WARNING, format("Field %s in class %s is not final", catalog.field(), catalog.containerClass()), elm);
                 }
 
-                if (!compare.toString().equals(elm.asType().toString())) {
+                if (!types.erasure(compare).toString().equals(types.erasure(elm.asType()).toString())) {
 
-                    if (!isAssignable(elm.asType(), elements.getTypeElement(catalog.catalogTypeClass()).asType())) {
+                    if (!isAssignable(types.erasure(elm.asType()), elements.getTypeElement(catalog.catalogTypeClass()).asType())) {
                         getMessager().printMessage(ERROR, format("Field %s in class %s is not of type %s", catalog.field(), catalog.containerClass(),
                                 catalog.catalogTypeClass()), typeElement);
                     }
