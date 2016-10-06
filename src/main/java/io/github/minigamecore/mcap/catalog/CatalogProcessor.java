@@ -38,6 +38,10 @@ import ninja.leaping.configurate.ConfigurationNode;
 import ninja.leaping.configurate.gson.GsonConfigurationLoader;
 import ninja.leaping.configurate.loader.ConfigurationLoader;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,6 +50,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.zip.GZIPOutputStream;
 
 import javax.annotation.Nonnull;
 import javax.annotation.processing.AbstractProcessor;
@@ -105,31 +110,8 @@ public class CatalogProcessor extends AbstractProcessor {
         if (env.processingOver()) {
 
             if (!env.errorRaised()) {
-
-                try {
-                    Path path = Paths.get(filer.createResource(SOURCE_OUTPUT, "", "assets/minigamecore/mcap/catalog.json").toUri());
-
-                    if (Files.notExists(path)) {
-                        if (Files.notExists(path.getParent())) {
-                            Files.createDirectories(path.getParent());
-                        }
-
-                        Files.createFile(path);
-                    }
-
-                    ConfigurationLoader<ConfigurationNode> loader = GsonConfigurationLoader.builder().setPath(path).build();
-                    loader.save(node);
-                    getMessager().printMessage(NOTE, format("Catalog mappings available at %s", path));
-                } catch (IOException e) {
-                    getMessager().printMessage(ERROR, "Error occurs while processing catalog.json");
-                    e.printStackTrace();
-                }
-
-                getMessager().printMessage(NOTE, "====================================");
-                getMessager().printMessage(NOTE, "Catalog Stats");
-                getMessager().printMessage(NOTE, "====================================");
-                getMessager().printMessage(NOTE, format("Rounds: %s, Assignments: %s", rounds, assignments));
-                getMessager().printMessage(NOTE, "====================================");
+                createFile();
+                printStats();
             }
             return false;
         }
@@ -243,6 +225,95 @@ public class CatalogProcessor extends AbstractProcessor {
             }
         }
         return false;
+    }
+
+    private void createFile() {
+        Path tmpFile = null;
+        try {
+            tmpFile = Files.createTempFile("catalog", "");
+        } catch (IOException e) {
+            getMessager().printMessage(ERROR, "Error creating tmp file");
+            e.printStackTrace();
+        }
+
+        assert tmpFile != null;
+        ConfigurationLoader<ConfigurationNode> loader = GsonConfigurationLoader.builder().setPath(tmpFile).build();
+
+        try {
+            loader.save(node);
+        } catch (IOException e) {
+            getMessager().printMessage(ERROR, format("Error saving to tmp file %s", tmpFile));
+            e.printStackTrace();
+        }
+
+        Path output;
+
+        try {
+            output = Paths.get(filer.createResource(SOURCE_OUTPUT, "", "assets/minigamecore/mcap/catalog.json.gz").toUri());
+
+            if (Files.notExists(output)) {
+
+                if (Files.notExists(output.getParent())) {
+                    Files.createDirectories(output.getParent());
+                }
+
+                Files.createFile(output);
+            }
+            try (BufferedInputStream istream = new BufferedInputStream(new FileInputStream(tmpFile.toFile()));
+                    BufferedOutputStream ostream = new BufferedOutputStream(new GZIPOutputStream(new FileOutputStream(output.toFile())))) {
+                byte[] buffer = new byte[1024];
+
+                int length;
+                while ((length = istream.read(buffer)) > 0) {
+                    ostream.write(buffer, 0, length);
+                }
+
+                ostream.flush();
+            }
+        } catch (IOException e) {
+            try {
+                output = Paths.get(filer.createResource(SOURCE_OUTPUT, "", "assets/minigamecore/mcap/catalog.json").toUri());
+
+                if (Files.notExists(output)) {
+
+                    if (Files.notExists(output.getParent())) {
+                        Files.createDirectories(output.getParent());
+                    }
+
+                    Files.createFile(output);
+                }
+                try (BufferedInputStream istream = new BufferedInputStream(new FileInputStream(tmpFile.toFile()));
+                        BufferedOutputStream ostream = new BufferedOutputStream(new FileOutputStream(output.toFile()))) {
+                    byte[] buffer = new byte[1024];
+
+                    int length;
+                    while ((length = istream.read(buffer)) > 0) {
+                        ostream.write(buffer, 0, length);
+                    }
+
+                    ostream.flush();
+                } catch (IOException e1) {
+                    e1.printStackTrace();
+                }
+            } catch (IOException e1) {
+                e1.printStackTrace();
+            }
+        }
+
+
+        try {
+            Files.deleteIfExists(tmpFile);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void printStats() {
+        getMessager().printMessage(NOTE, "====================================");
+        getMessager().printMessage(NOTE, "Catalog Stats");
+        getMessager().printMessage(NOTE, "====================================");
+        getMessager().printMessage(NOTE, format("Rounds: %s, Assignments: %s", rounds, assignments));
+        getMessager().printMessage(NOTE, "====================================");
     }
 
 }
